@@ -1,0 +1,529 @@
+<html>
+<head>
+<title data-bind="text: name">Cost Divider</title>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.4/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-cookie/1.4.1/jquery.cookie.min.js"></script>
+<script src="knockout-3.2.0.js"></script>
+<script src="sprintf/sprintf.min.js"></script>
+<script>
+	function download(data, filename) {
+		var URL = window.URL || window.webkitURL;
+		var a = document.createElement('a');
+		var blob = new Blob([data], {'type':'application\/octet-stream'});
+		a.href = URL.createObjectURL(blob);
+		a.download = filename;
+		a.click();
+	};
+	function parseCurrency(n) {
+		n = '' + n;
+		n = n.replace(/[^0-9\.\-]*/g, '');
+		if(n === '') { 
+			n = '0';
+		}
+		return parseFloat(n);
+	}
+	function toCsv(costDivider) {
+		var rows = [];
+		
+		//Build header row 1
+		function hMerged(value, size, row) {
+			row.push(value);
+			for(var i = 1; i < size; i++) {
+				row.push('');
+			}
+		}
+		
+		var row = [];
+		row.push('Description');
+		hMerged('Amount Paid', costDivider.numberOfEntities() + 1, row);
+		hMerged('Proportion Consumed', costDivider.numberOfEntities() + 1, row);
+		hMerged('Amount Consumed', costDivider.numberOfEntities(), row);
+		hMerged('Amount Owed', costDivider.numberOfEntities(), row);
+		hMerged('Running Amount Owed', costDivider.numberOfEntities(), row);
+		rows.push(row);
+		
+		//Build header row 2
+		function pushEntities(entities, row) {
+			for(var i = 0; i < entities.length; i++) {
+				row.push(entities[i].name());
+			}
+		}
+		row = [];
+		var entities = costDivider.entities();
+		row.push('');
+		pushEntities(entities, row);
+		row.push('Total');
+		pushEntities(entities, row);
+		row.push('Total');
+		pushEntities(entities, row);
+		pushEntities(entities, row);
+		pushEntities(entities, row);
+		rows.push(row);
+		
+		//Build content rows
+		var entries = costDivider.entries();
+		for(var i = 0; i < entries.length; i++) {
+			var entry = entries[i];
+			row = [];
+			
+			row.push(entry.name());
+			
+			var data = entry.data();
+			for(var j = 0; j < data.length; j++) {
+				row.push(data[j].amount());
+			}
+			row.push(entry.totalAmount());
+			
+			for(var j = 0; j < data.length; j++) {
+				row.push(data[j].proportion());
+			}
+			row.push(entry.totalProportion());
+			
+			for(var j = 0; j < data.length; j++) {
+				row.push(data[j].amountConsumed());
+			}
+			
+			for(var j = 0; j < data.length; j++) {
+				row.push(data[j].amountOwed());
+			}
+			
+			for(var j = 0; j < data.length; j++) {
+				row.push(data[j].runningAmountOwed());
+			}
+			
+			rows.push(row);
+		}
+		
+		//Build summary row
+		row = [];
+		hMerged('', costDivider.numberOfEntities() * 4 + 2, row);
+		row.push('Total:');
+		
+		var data = costDivider.lastEntry().data();
+		
+		for(var i = 0; i < data.length; i++) {
+			row.push(data[i].runningAmountOwed());
+		}
+		rows.push(row);
+		
+		//Serialize
+		var output = [];
+		for(var i = 0; i < rows.length; i++) {
+			var row = rows[i];
+			if(i > 0) { output.push('\r\n'); }
+			for(var j = 0; j < row.length; j++) {
+				if(j > 0) { output.push(','); }
+				var cell = '' + row[j];
+				if(cell.indexOf('"') > -1 || cell.indexOf(' ') > -1) {
+					output.push('"');
+					output.push(cell.replace(/"/g, '""'));
+					output.push('"');
+				} else { 
+					output.push(cell);
+				}
+			}
+		}
+		
+		return output.join('');
+	}
+	function save(costDivider) {
+		//Use JSON.parse/JSON.stringify/$.cookie() to save
+		//Need to write serialization/deserialization logic
+	}
+	function Rounding() {
+		this.granularity = ko.observable('0.01');
+	}
+	Rounding.prototype.formatCurrency = function(n) {
+		var granularity = this.granularity();
+		n = Math.round(n / granularity) * granularity;
+		if(granularity < 1) {
+			n = '' + n;
+			var i = n.indexOf('.');
+			if(i == -1) {
+				return n + '.00';
+			} else if(i == n.length - 2) {
+				return n + '0';
+			} else if(i < n.length - 3) {
+				return n.substring(0, i + 3);
+			}
+		}
+		return n;
+	};
+	function Details() {
+		this.state = ko.observable(false);
+	}
+	function CostDividerVM() {
+		this.name = ko.observable('Cost Divider');
+		this.rounding = new Rounding();
+		this.details = new Details();
+		this.entities = ko.observableArray();
+		this.numberOfEntities = ko.computed(function() { return this.entities().length; }.bind(this));
+		this.amountColCount = function() {
+			return this.numberOfEntities() + 1;
+		}.bind(this);
+		this.proportionColCount = function() {
+			return this.numberOfEntities() + (window.details.state() ? 1 : 0);
+		}.bind(this);
+		this.totalColCount = function() {
+			return 1 /*desc*/ + 
+				this.amountColCount() + 
+				this.proportionColCount() +
+				this.numberOfEntities() * (window.details.state() ? 3 : 1) /*amount consumed, amount owed, running amount owed*/ ;
+		}.bind(this);
+		this.newEntity = function() {
+			this.entities.push(
+				{
+					id:this.entities().length,
+					name:ko.observable('Person')
+				}
+			);
+		}.bind(this);
+		this.newEntity();
+		
+		this.entries = ko.observableArray();
+		this.lastEntry = ko.computed(function() {
+			var entries = this.entries();
+			return entries[entries.length-1];
+		}.bind(this));
+		this.newEntry = function() {
+			var entries = this.entries();
+			var lastEntry = entries.length ? entries[entries.length-1] : undefined;
+			this.entries.push(new EntryVM(entries.length, this.entities, lastEntry, this.rounding));
+		}.bind(this);
+		this.newEntry();
+	}
+	function EntryVM(id, entities, prev, rounding) {
+		this.id = id;
+		this.name = ko.observable('Description');
+		
+		this.entityData = {};
+		var aggregatesInitialized = false;
+		var getData = function(id) {
+			if(!this.entityData[id]) {
+				this.entityData[id] = new EntryEntityVM(rounding);
+				if(aggregatesInitialized) {
+					this.entityData[id].setEntry(this);
+					this.entityData[id].setPrevious(prev && prev.entityData[id]);
+				}
+			}
+			return this.entityData[id];
+		}.bind(this);
+		this.data = ko.computed(function() {
+			var _entities = entities();
+			var a = [];
+			for(var i = 0; i < _entities.length; i++) {
+				a.push(getData(_entities[i].id));
+			}
+			console.log(a);
+			return a;
+		}.bind(this));
+		
+		this.totalAmount = ko.computed(function() {
+			var _entities = entities();
+			var total = 0;
+			for(var i = 0; i < _entities.length; i++) {
+				total += getData(_entities[i].id).getAmount();
+			}
+			return total;
+		}.bind(this));
+		
+		this.totalAmountFormatted = ko.computed(function() {
+			return rounding.formatCurrency(this.totalAmount());
+		}.bind(this));
+		
+		this.totalProportion = ko.computed(function() {
+			var _entities = entities();
+			var total = 0;
+			for(var i = 0; i < _entities.length; i++) {
+				total += getData(_entities[i].id).getProportion();
+			}
+			if(total == 0) {
+				total = 1;
+			}
+			return total;
+		}.bind(this));
+		
+		aggregatesInitialized = true;
+		$.each(this.entityData, function(id, entityData) {
+			entityData.setEntry(this);
+			entityData.setPrevious(prev && prev.entityData[id]);
+		}.bind(this));
+	}
+	function EntryEntityVM(rounding) {
+		this.amount = ko.observable(0);
+		this.getAmount = function() { return parseCurrency(this.amount()); };
+		this.amountFormatted = ko.computed(function() {
+			return rounding.formatCurrency(this.getAmount());
+		}.bind(this));
+		this.proportion = ko.observable(1);
+		this.getProportion = function() { return parseCurrency(this.proportion()); };
+		
+		this.setEntry = function(entry) {
+			this.amountConsumed = ko.computed(function() {
+				return (entry.totalAmount() * this.getProportion()) / entry.totalProportion();
+			}.bind(this));
+			
+			this.amountConsumedFormatted = ko.computed(function() {
+				return rounding.formatCurrency(this.amountConsumed());
+			}.bind(this));
+			
+			this.amountOwed = ko.computed(function() {
+				return this.getAmount() - this.amountConsumed();
+			}.bind(this));
+			
+			this.amountOwedFormatted = ko.computed(function() {
+				return rounding.formatCurrency(this.amountOwed());
+			}.bind(this));
+		}.bind(this);
+		
+		this.setPrevious = function(prev) {
+			this.runningAmountOwed = ko.computed(function() {
+				return (prev ? prev.runningAmountOwed() : 0) + this.amountOwed();
+			}.bind(this));
+			
+			this.runningAmountOwedFormatted = ko.computed(function() {
+				return rounding.formatCurrency(this.runningAmountOwed());
+			}.bind(this));
+		}.bind(this);
+	}
+	
+	ko.bindingHandlers.editable = {
+		init: function(e, valueAccessor) {
+			var $parent = $(e),
+				$read = $parent.find('.read'),
+				$write = $parent.find('.write');
+			
+			var toggleWrite = function() {
+				var width = $read.width();
+				$parent.addClass('writable');
+				$write.css('min-width', width+'px');
+				$write.select();
+			};
+			
+			var toggleRead = function() {
+				$parent.removeClass('writable');
+			};
+			
+			var highlightEditable = function() {
+				$('body').addClass('highlightEditable');
+			};
+			
+			var dehighlightEditable = function() {
+				$('body').removeClass('highlightEditable');
+			};
+			
+			$read.click(toggleWrite);
+			$read.focus(toggleWrite);
+			$read.hover(highlightEditable, dehighlightEditable);
+			$read.attr('tabIndex', '0');
+			
+			$write.blur(toggleRead);
+		}
+	};
+
+	$(function() {
+		var costDivider = new CostDividerVM();
+		window.rounding = costDivider.rounding;
+		window.details = costDivider.details;
+		ko.applyBindings(costDivider, $('html')[0]);
+		
+		$('#showDetails').change(function() {
+			$('table').toggleClass('concise', !this.checked);
+		});
+		
+		$('#export').click(function() { 
+			download(toCsv(costDivider), 'cost-divider.csv');
+		});
+		
+		
+		$('#save').click(function() {
+			save(costDivider);
+		});
+	});
+</script>
+
+<style>
+body {
+	font-family: Calibri, Candara, Arial
+}
+input.write {
+	font-family: inherit;
+	width: 5em;
+}
+.read {
+	cursor: pointer;
+	display: block;
+	min-width: 1em;
+	width: 100%;
+}
+.write {
+	display: none;
+}
+.highlightEditable .read {
+	background-color: #eef;
+}
+.writable .write {
+	display: inherit;
+}
+.writable .read {
+	display: none;
+}
+.concise .detail {
+	display: none;
+}
+table {
+	border-collapse: collapse; 
+	border-top: solid 1px;
+}
+thead, tbody {
+	border-color: #000;
+	border-style: solid;
+	border-width: 0px 1px;
+}
+td, th {
+	padding: 1px 10px;
+}
+th {
+	font-weight: normal;
+	vertical-align: bottom;
+}
+th.header {
+	font-weight: bold;
+}
+thead {
+	border-bottom: 1px solid;
+}
+tbody {
+	border-bottom: 1px solid;
+}
+tbody th, tfoot th {
+	text-align: left;
+}
+tbody td, tfoot td {
+	text-align: right;
+}
+.colA + .colB,
+.colB + .colA {
+	border-left: 1px solid;
+}
+.header.desc { border-right: 1px solid; }
+tfoot .colA + .colB,
+tfoot .colB + .colA {
+	border-left: solid 2px;
+}
+tfoot .runningAmountOwed {
+	border-top: solid 2px;
+	border-bottom: solid 2px;
+}
+tfoot {
+	border-right: solid 2px;
+}
+@media print {
+	#params, button { 
+		display: none;
+	}
+}
+
+</style>
+
+</head>
+<body>
+<h1 data-bind="editable:true">
+	<span class="read" data-bind="text:name"></span>
+	<input class="write" data-bind="value:name"></input>
+</h1>
+<div id="rounding" data-bind="with:rounding">
+	Rounding granularity: 
+	<input type="radio" name="rounding" value="0.01" data-bind="checked: granularity" checked>0.01</input>
+	<input type="radio" name="rounding" value="1" data-bind="checked: granularity">1</input>
+	<input type="radio" name="rounding" value="5" data-bind="checked: granularity">5</input>
+</div>
+<div id="params">
+	<!-- ko with:details -->
+	Show details? <input id="showDetails" type="checkbox" data-bind="checked: state" />
+	<!-- /ko -->
+</div>
+<table class='concise'>
+	<thead>
+		<tr>
+			<th class="header desc colA" rowspan="2">Description</th>
+			<th class="header amount colB" data-bind="attr: { colspan: amountColCount()}">Amount Paid</th>
+			<th class="header proportion colA" data-bind="attr: { colspan: proportionColCount()}">Proportion Consumed</th>
+			<th class="header amountConsumed detail colB" data-bind="attr: { colspan: numberOfEntities}">Amount Consumed</th>
+			<th class="header amountOwed detail colA" data-bind="attr: { colspan: numberOfEntities}">Amount Owed</th>
+			<th class="header runningAmountOwed colB" data-bind="attr: { colspan: numberOfEntities}">Running Amount Owed</th>
+		</tr>
+		<tr>
+			<!-- ko foreach: entities -->
+				<th class="amount colB" data-bind="editable:true">
+					<span class="read" data-bind="text:name"></span>
+					<input class="write" data-bind="value:name"></input>
+				</th>
+			<!-- /ko -->
+			<th class="amount total colB"><button data-bind="click: newEntity">+</button></th>
+			<!-- ko foreach: entities -->
+				<th class="proportion colA" data-bind="text:name"></th>
+			<!-- /ko -->
+			<td class="proportion total detail colA">Total</td>
+			<!-- ko foreach: entities -->
+				<th class="amountConsumed detail colB" data-bind="text:name"></th>
+			<!-- /ko -->
+			<!-- ko foreach: entities -->
+				<th class="amountOwed detail colA" data-bind="text:name"></th>
+			<!-- /ko -->
+			<!-- ko foreach: entities -->
+				<th class="runningAmountOwed colB" data-bind="text:name"></th>
+			<!-- /ko -->
+		</tr>
+	</thead>
+	<tbody data-bind="foreach:entries">
+		<tr>
+			<th class="desc colA" data-bind="editable:true">
+				<span class="read" data-bind="text:name"></span>
+				<input class="write" data-bind="value:name">
+			</th>
+			<!-- ko foreach: data -->
+				<td class="amount colB" data-bind="editable:true">
+					<span class="read" data-bind="text:amountFormatted"></span>
+					<input class="write" data-bind="value:amount">
+				</td>
+			<!-- /ko -->
+			<td class="amount total colB" data-bind="text:totalAmountFormatted"></td>
+			<!-- ko foreach: data -->
+				<td class="proportion colA" data-bind="editable:true">
+					<span class="read" data-bind="text:proportion"></span>
+					<input class="write" data-bind="value:proportion">
+				</td>
+			<!-- /ko -->
+			<td class="proportion total detail colA" data-bind="text:totalProportion"></td>
+			<!-- ko foreach: data -->
+				<td class="amountConsumed detail colB" data-bind="text:amountConsumedFormatted"></td>
+			<!-- /ko -->
+			<!-- ko foreach: data -->
+				<td class="amountOwed detail colA" data-bind="text:amountOwedFormatted"></td>
+			<!-- /ko -->
+			<!-- ko foreach: data -->
+				<td class="runningAmountOwed colB" data-bind="text:runningAmountOwedFormatted"></td>
+			<!-- /ko -->
+		</tr>
+	</tbody>
+	<tfoot>
+		<tr>
+			<th class="desc">
+				<button data-bind="click:newEntry">+</button>
+			</th>
+			<td class="amount" data-bind="attr: { colspan: amountColCount()}"></td>
+			<td class="proportion" data-bind="attr: { colspan: proportionColCount()}"></td>
+			<td class="amountConsumed detail" data-bind="attr: { colspan: numberOfEntities()}"></td>
+			<td class="amountOwed detail colA" data-bind="attr: { colspan: numberOfEntities()}"></td>
+			<!-- ko with: lastEntry -->
+			<!-- ko foreach: data -->
+				<td class="runningAmountOwed colB" data-bind="text:runningAmountOwedFormatted"></td>
+			<!-- /ko -->
+			<!-- /ko -->
+		</tr>
+	</tfoot>
+</table>
+<!--<button id="export">Export</button><button id="save">Save</button>-->
+</body>
+</html>
