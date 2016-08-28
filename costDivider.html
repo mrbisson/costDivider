@@ -152,6 +152,36 @@
 	function Details() {
 		this.state = ko.observable(false);
 	}
+	function Payback(result) {
+		this.state = ko.observable(false);
+		this.schemes = ko.observableArray();
+		this.schemeIndex = ko.observable(0);
+		this.currentScheme = ko.computed(function() {
+			var i = this.schemeIndex();
+			if(this.schemes().length >= i) {
+				return null;
+			}
+			return this.schemes()[i];
+		}.bind(this));
+		var currentData = null;
+		function getData() {
+			return $.map(result(), function(o) {
+				return o.data;
+			});
+		}
+		this.reset = function() {
+			this.schemes.removeAll();
+			this.schemeIndex(0);
+			currentData = null;
+		}.bind(this);
+		result.subscribe(function() {
+			if(!currentData)	return;
+			if(currentData !== getData()) {
+				this.reset();
+			}
+		}.bind(this));
+		//TODO: Next: add button to generate suggestions and write algorithm to do so with result of getData()
+	}
 	function CostDividerVM() {
 		this.name = ko.observable('Cost Divider');
 		this.rounding = new Rounding();
@@ -191,6 +221,13 @@
 			this.entries.push(new EntryVM(entries.length, this.entities, lastEntry, this.rounding));
 		}.bind(this);
 		this.newEntry();
+		
+		this.result = ko.computed(function() {
+			var summaryEntry = this.lastEntry();
+			return summaryEntry.summary();
+		}.bind(this));
+		
+		this.payback = new Payback(this.result);
 	}
 	function EntryVM(id, entities, prev, rounding) {
 		this.id = id;
@@ -217,6 +254,21 @@
 			console.log(a);
 			return a;
 		}.bind(this));
+		this.summary = ko.computed(function() {
+			var _entities = entities();
+			var a = [];
+			for(var i = 0; i < _entities.length; i++) {
+				var entity = _entities[i],
+					data = getData(entity.id);
+				if(data.entryReady()) {
+					a.push({
+						entity: entity,
+						data: data.amountOwed()
+					});
+				}
+			}
+			return a;
+		});
 		
 		this.totalAmount = ko.computed(function() {
 			var _entities = entities();
@@ -258,6 +310,7 @@
 		this.proportion = ko.observable(1);
 		this.getProportion = function() { return parseCurrency(this.proportion()); };
 		
+		this.entryReady = ko.observable(false);
 		this.setEntry = function(entry) {
 			this.amountConsumed = ko.computed(function() {
 				return (entry.totalAmount() * this.getProportion()) / entry.totalProportion();
@@ -274,6 +327,8 @@
 			this.amountOwedFormatted = ko.computed(function() {
 				return rounding.formatCurrency(this.amountOwed());
 			}.bind(this));
+			
+			this.entryReady(true);
 		}.bind(this);
 		
 		this.setPrevious = function(prev) {
@@ -524,6 +579,14 @@ tfoot {
 		</tr>
 	</tfoot>
 </table>
+<!-- ko with: payback -->
+	<div id="params">
+		Suggest payback scheme? <input id="paybackEnabled" type="checkbox" data-bind="checked: state" />
+	</div>
+	<!-- ko if: state -->
+		This is where content goes
+	<!-- /ko -->
+<!-- /ko -->
 <!--<button id="export">Export</button><button id="save">Save</button>-->
 </body>
 </html>
